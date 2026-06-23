@@ -21,7 +21,6 @@ const TIER0_MSG_EXPORT: &CStr = c"Msg";
 const TIER0_CON_COLOR_MSG_EXPORT: &CStr = c"ConColorMsg";
 const TIER0_COLOR_MSG_EXPORT: &CStr = c"ColorMsg";
 const LOG_PREFIX: &str = "[autodirector-fix]";
-const OLD_LOG_PREFIX: &str = "autodirector_camera_fix: ";
 const LOG_COLOR: ConsoleColor = ConsoleColor {
     r: 80,
     g: 200,
@@ -140,7 +139,7 @@ unsafe extern "system" fn init_thread(param: *mut c_void) -> u32 {
 }
 
 unsafe fn init_thread_body() -> u32 {
-    log("autodirector_camera_fix: init thread started");
+    log("init thread started");
 
     for _ in 0..600 {
         let client = unsafe { GetModuleHandleA(CLIENT_DLL.as_ptr()) };
@@ -155,7 +154,7 @@ unsafe fn init_thread_body() -> u32 {
         }
     }
 
-    log("autodirector_camera_fix: client.dll wait timed out");
+    log("client.dll wait timed out");
     0
 }
 
@@ -163,27 +162,25 @@ unsafe fn initialize_patch(client: HModule) {
     let config = load_config();
     DISABLED_CAMERA_MASK.store(config.disabled_mask, Ordering::SeqCst);
     log(&format!(
-        "autodirector_camera_fix: config fixed={} first_person={} chase={} cameraman={} disabled_mask={:#x}",
+        "config fixed={} first_person={} chase={} cameraman={} disabled_mask={:#x}",
         config.fixed, config.first_person, config.chase, config.cameraman, config.disabled_mask
     ));
 
     if config.disabled_mask == 0 {
-        log("autodirector_camera_fix: all camera modes are enabled; patch is not needed");
+        log("all camera modes are enabled; patch is not needed");
         return;
     }
 
     let scan_start = Instant::now();
     let Some(patch_address) = (unsafe { find_patch_address(client, scan_start) }) else {
         let elapsed = scan_start.elapsed().as_secs_f64() * 1000.0;
-        log(&format!(
-            "autodirector_camera_fix: signature scan failed elapsed_ms={elapsed:.3}"
-        ));
-        log("autodirector_camera_fix: autodirector view override signature was not found");
+        log(&format!("signature scan failed elapsed_ms={elapsed:.3}"));
+        log("autodirector view override signature was not found");
         return;
     };
     let scan_elapsed = scan_start.elapsed().as_secs_f64() * 1000.0;
     log(&format!(
-        "autodirector_camera_fix: signature scan completed elapsed_ms={scan_elapsed:.3}"
+        "signature scan completed elapsed_ms={scan_elapsed:.3}"
     ));
 
     for (offset, original_byte) in ORIGINAL_BYTES.iter().enumerate() {
@@ -195,7 +192,7 @@ unsafe fn initialize_patch(client: HModule) {
         PATCH_ADDRESS.store(patch_address as *mut c_void, Ordering::SeqCst);
         PATCHED.store(true, Ordering::SeqCst);
         log(&format!(
-            "autodirector_camera_fix: patched autodirector view override client={:#x} address={:#x} len={} disabled_mask={:#x}",
+            "patched autodirector view override client={:#x} address={:#x} len={} disabled_mask={:#x}",
             client as usize,
             patch_address,
             AUTODIRECTOR_VIEW_OVERRIDE_PATCH_LEN,
@@ -206,7 +203,7 @@ unsafe fn initialize_patch(client: HModule) {
             free_trampoline();
         }
         log(&format!(
-            "autodirector_camera_fix: failed to patch autodirector view override address={:#x}",
+            "failed to patch autodirector view override address={:#x}",
             patch_address
         ));
     }
@@ -225,7 +222,7 @@ unsafe fn write_conditional_patch(patch_address: usize, disabled_mask: u32) -> b
         TRAMPOLINE_ADDRESS.store(trampoline.as_mut_ptr().cast::<c_void>(), Ordering::SeqCst);
         TRAMPOLINE_LEN.store(trampoline.len(), Ordering::SeqCst);
         log(&format!(
-            "autodirector_camera_fix: installed conditional trampoline address={:#x} len={}",
+            "installed conditional trampoline address={:#x} len={}",
             trampoline.as_ptr() as usize,
             trampoline.len()
         ));
@@ -276,32 +273,26 @@ unsafe fn allocate_trampoline(
 
 fn load_config() -> CameraConfig {
     let Some(path) = module_config_path() else {
-        log("autodirector_camera_fix: using default config; module path is unavailable");
+        log("using default config; module path is unavailable");
         return CameraConfig::default();
     };
 
     let Ok(contents) = std::fs::read_to_string(&path) else {
-        log(&format!(
-            "autodirector_camera_fix: using default config; missing {}",
-            path.display()
-        ));
+        log(&format!("using default config; missing {}", path.display()));
         return CameraConfig::default();
     };
 
     match parse_config(&contents) {
         Ok(parsed) => {
-            log(&format!(
-                "autodirector_camera_fix: loaded config {}",
-                path.display()
-            ));
+            log(&format!("loaded config {}", path.display()));
             for warning in &parsed.warnings {
-                log(&format!("autodirector_camera_fix: {warning}"));
+                log(&format!("{warning}"));
             }
             parsed.config
         }
         Err(error) => {
             log(&format!(
-                "autodirector_camera_fix: invalid config {}; using defaults: {}",
+                "invalid config {}; using defaults: {}",
                 path.display(),
                 error
             ));
@@ -328,14 +319,14 @@ unsafe fn find_patch_address(client: HModule, scan_start: Instant) -> Option<usi
     let elapsed = scan_start.elapsed().as_secs_f64() * 1000.0;
 
     log(&format!(
-        "autodirector_camera_fix: scanned client.dll .text size={} matches={} elapsed_ms={elapsed:.3}",
+        "scanned client.dll .text size={} matches={} elapsed_ms={elapsed:.3}",
         text.data.len(),
         search.matches
     ));
 
     let Some(offset) = search.unique_offset else {
         log(&format!(
-            "autodirector_camera_fix: expected one signature match in client.dll .text, found {}",
+            "expected one signature match in client.dll .text, found {}",
             search.matches
         ));
         return None;
@@ -417,7 +408,7 @@ unsafe fn restore_patch() {
     } != 0;
     if !ok {
         log(&format!(
-            "autodirector_camera_fix: failed to unprotect for restore address={:#x}",
+            "failed to unprotect for restore address={:#x}",
             address
         ));
         return;
@@ -446,7 +437,7 @@ unsafe fn restore_patch() {
     }
 
     log(&format!(
-        "autodirector_camera_fix: restored autodirector view override address={:#x} len={}",
+        "restored autodirector view override address={:#x} len={}",
         address, AUTODIRECTOR_VIEW_OVERRIDE_PATCH_LEN
     ));
 
@@ -515,10 +506,7 @@ unsafe fn read_i32(address: usize) -> i32 {
 }
 
 fn log(message: &str) {
-    let message = format!(
-        "{LOG_PREFIX} {}",
-        message.strip_prefix(OLD_LOG_PREFIX).unwrap_or(message)
-    );
+    let message = format!("{LOG_PREFIX} {message}");
 
     log_to_game_console(&message);
 
@@ -569,11 +557,11 @@ fn log_to_game_console(message: &str) {
 }
 
 fn module_log_path() -> Option<std::path::PathBuf> {
-    Some(module_file_path()?.with_file_name("autodirector_camera_fix.log"))
+    Some(module_file_path()?.with_file_name("autodirector_fix.log"))
 }
 
 fn module_config_path() -> Option<std::path::PathBuf> {
-    Some(module_file_path()?.with_file_name("autodirector_fix_config.toml"))
+    Some(module_file_path()?.with_file_name("autodirector-fix-config.toml"))
 }
 
 fn module_file_path() -> Option<std::path::PathBuf> {

@@ -161,7 +161,7 @@ mod tests {
 
     #[test]
     fn default_config_matches_template_file() {
-        let parsed = parse_config(include_str!("../autodirector_fix_config.toml")).unwrap();
+        let parsed = parse_config(include_str!("../autodirector-fix-config.toml")).unwrap();
 
         assert_eq!(parsed.config, CameraConfig::default());
         assert!(parsed.warnings.is_empty());
