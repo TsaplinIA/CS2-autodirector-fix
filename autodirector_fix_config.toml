@@ -1,0 +1,8 @@
+[cameras]
+# true = keep the original CS2 autodirector override for this camera family.
+# false = bypass the autodirector override and fall back to normal camera setup.
+fixed = true
+first_person = false
+chase = true
+cameraman = true
+
