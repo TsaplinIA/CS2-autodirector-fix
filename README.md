@@ -1,10 +1,10 @@
 # CS2 Autodirector Fix
 
 [![Rust](https://img.shields.io/badge/Rust-stable-b7410e?logo=rust&logoColor=white)](https://www.rust-lang.org/)
-[![Platform](https://img.shields.io/badge/platform-Windows%20x64-0078d4?logo=windows&logoColor=white)](#requirements)
+![Platform](https://img.shields.io/badge/platform-Windows%20x64-0078d4?logo=windows&logoColor=white)
 [![CS2](https://img.shields.io/badge/game-Counter--Strike%202-f3a712)](#english)
 [![HLAE](https://img.shields.io/badge/HLAE-mirv__loadbinary-6f42c1)](https://github.com/advancedfx/advancedfx)
-[![Release](https://img.shields.io/badge/release-manual-blue)](../../releases)
+[![Release](https://img.shields.io/badge/release-manual-blue)](https://github.com/TsaplinIA/CS2-autodirector-fix/releases)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Status](https://img.shields.io/badge/status-experimental-orange)](#usage)
 
@@ -39,7 +39,7 @@ https://github.com/user-attachments/assets/fb6fc08f-caeb-4a60-a67f-e452e088758a
 ### Usage
 
 1. Download the latest `autodirector-fix-vX.Y.Z.zip` from
-   [Releases](../../releases).
+   [Releases](https://github.com/TsaplinIA/CS2-autodirector-fix/releases).
 2. Extract the archive. It contains:
    - `autodirector-fix-vX.Y.Z.dll`
    - `autodirector-fix-config.toml`
@@ -125,7 +125,7 @@ https://github.com/user-attachments/assets/fb6fc08f-caeb-4a60-a67f-e452e088758a
 ### Использование
 
 1. Скачай последний `autodirector-fix-vX.Y.Z.zip` в
-   [разделе релизов](../../releases).
+   [разделе релизов](https://github.com/TsaplinIA/CS2-autodirector-fix/releases).
 2. Распакуй архив. Внутри лежат:
    - `autodirector-fix-vX.Y.Z.dll`
    - `autodirector-fix-config.toml`
