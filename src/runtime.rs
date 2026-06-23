@@ -6,6 +6,10 @@ use std::slice;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, AtomicU32, AtomicUsize, Ordering};
 use std::time::Instant;
 
+use crate::config::{CameraConfig, DEFAULT_DISABLED_CAMERA_MASK, parse_config};
+use crate::pattern::find_pattern;
+use crate::trampoline::{build_conditional_trampoline, emit_absolute_jump};
+
 type HModule = *mut c_void;
 type Handle = *mut c_void;
 type Tier0Msg = unsafe extern "C" fn(format: *const c_char, ...);
@@ -21,12 +25,6 @@ const GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS: u32 = 0x0000_0004;
 const AUTODIRECTOR_VIEW_OVERRIDE_PATCH_LEN: usize = 26;
 const AUTODIRECTOR_VIEW_OVERRIDE_JMP_OFFSET: usize = 21;
 const AUTODIRECTOR_VIEW_OVERRIDE_JMP_LEN: usize = 5;
-const AUTODIRECTOR_MODE_OFFSET: i32 = 0x38;
-const AUTODIRECTOR_MODE_FIXED: u32 = 1;
-const AUTODIRECTOR_MODE_FIRST_PERSON: u32 = 2;
-const AUTODIRECTOR_MODE_CHASE: u32 = 3;
-const AUTODIRECTOR_MODE_CAMERAMAN: u32 = 4;
-const DEFAULT_DISABLED_CAMERA_MASK: u32 = 1 << AUTODIRECTOR_MODE_FIRST_PERSON;
 const AUTODIRECTOR_VIEW_OVERRIDE_PATTERN: &[Option<u8>] = &[
     Some(0xe8), // call FUN_180b0f460
     None,
@@ -256,97 +254,6 @@ unsafe fn allocate_trampoline(
     }
 }
 
-fn build_conditional_trampoline(
-    get_observer_state: usize,
-    normal_setup_address: usize,
-    original_jump_target: usize,
-    disabled_mask: u32,
-) -> Vec<u8> {
-    let mut code = Vec::with_capacity(128);
-
-    code.extend_from_slice(&[
-        0x50, // push rax
-        0x51, // push rcx
-        0x52, // push rdx
-        0x41, 0x50, // push r8
-        0x41, 0x51, // push r9
-        0x41, 0x52, // push r10
-        0x41, 0x53, // push r11
-        0x53, // push rbx
-    ]);
-
-    emit_mov_rax_imm64(&mut code, get_observer_state);
-    code.extend_from_slice(&[0xff, 0xd0]); // call rax
-    code.extend_from_slice(&[0x8b, 0x48, AUTODIRECTOR_MODE_OFFSET as u8]); // mov ecx, [rax+0x38]
-    code.extend_from_slice(&[0xb8, 1, 0, 0, 0]); // mov eax, 1
-    code.extend_from_slice(&[0xd3, 0xe0]); // shl eax, cl
-    code.push(0xa9); // test eax, disabled_mask
-    code.extend_from_slice(&disabled_mask.to_le_bytes());
-
-    let jz_offset_position = code.len() + 2;
-    code.extend_from_slice(&[0x0f, 0x84, 0, 0, 0, 0]); // jz original_path
-
-    emit_restore_saved_registers(&mut code);
-    emit_absolute_jump(&mut code, normal_setup_address);
-
-    let original_path_offset = code.len();
-    emit_restore_saved_registers(&mut code);
-    emit_mov_rax_imm64(&mut code, get_observer_state);
-    code.extend_from_slice(&[0xff, 0xd0]); // call rax
-    code.extend_from_slice(&[
-        0x48, 0x8b, 0xd6, // mov rdx, rsi
-        0x48, 0x8b, 0x08, // mov rcx, [rax]
-        0x4c, 0x8b, 0x41, 0x28, // mov r8, [rcx+28h]
-        0x48, 0x8b, 0xc8, // mov rcx, rax
-        0x41, 0xff, 0xd0, // call r8
-    ]);
-    emit_absolute_jump(&mut code, original_jump_target);
-
-    let after_jz = jz_offset_position + 4;
-    let relative = original_path_offset as isize - after_jz as isize;
-    code[jz_offset_position..jz_offset_position + 4]
-        .copy_from_slice(&(relative as i32).to_le_bytes());
-
-    code
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct CameraConfig {
-    fixed: bool,
-    first_person: bool,
-    chase: bool,
-    cameraman: bool,
-    disabled_mask: u32,
-}
-
-impl CameraConfig {
-    fn default() -> Self {
-        Self {
-            fixed: true,
-            first_person: false,
-            chase: true,
-            cameraman: true,
-            disabled_mask: DEFAULT_DISABLED_CAMERA_MASK,
-        }
-    }
-
-    fn refresh_disabled_mask(&mut self) {
-        self.disabled_mask = 0;
-        if !self.fixed {
-            self.disabled_mask |= 1 << AUTODIRECTOR_MODE_FIXED;
-        }
-        if !self.first_person {
-            self.disabled_mask |= 1 << AUTODIRECTOR_MODE_FIRST_PERSON;
-        }
-        if !self.chase {
-            self.disabled_mask |= 1 << AUTODIRECTOR_MODE_CHASE;
-        }
-        if !self.cameraman {
-            self.disabled_mask |= 1 << AUTODIRECTOR_MODE_CAMERAMAN;
-        }
-    }
-}
-
 fn load_config() -> CameraConfig {
     let Some(path) = module_config_path() else {
         log("autodirector_camera_fix: using default config; module path is unavailable");
@@ -362,12 +269,15 @@ fn load_config() -> CameraConfig {
     };
 
     match parse_config(&contents) {
-        Ok(config) => {
+        Ok(parsed) => {
             log(&format!(
                 "autodirector_camera_fix: loaded config {}",
                 path.display()
             ));
-            config
+            for warning in &parsed.warnings {
+                log(&format!("autodirector_camera_fix: {warning}"));
+            }
+            parsed.config
         }
         Err(error) => {
             log(&format!(
@@ -378,90 +288,6 @@ fn load_config() -> CameraConfig {
             CameraConfig::default()
         }
     }
-}
-
-fn parse_config(contents: &str) -> Result<CameraConfig, String> {
-    let mut config = CameraConfig::default();
-    let mut in_cameras = false;
-
-    for (line_index, raw_line) in contents.lines().enumerate() {
-        let line = raw_line
-            .split_once('#')
-            .map_or(raw_line, |(line, _)| line)
-            .trim();
-        if line.is_empty() {
-            continue;
-        }
-
-        if line.starts_with('[') && line.ends_with(']') {
-            in_cameras = line == "[cameras]";
-            continue;
-        }
-
-        if !in_cameras {
-            continue;
-        }
-
-        let Some((key, value)) = line.split_once('=') else {
-            return Err(format!("line {}: expected key = value", line_index + 1));
-        };
-        let key = key.trim();
-        let value = parse_bool(value.trim())
-            .ok_or_else(|| format!("line {}: expected true or false", line_index + 1))?;
-
-        match key {
-            "fixed" | "point_camera" => config.fixed = value,
-            "first_person" | "first-person" | "ineye" | "in_eye" => config.first_person = value,
-            "chase" => config.chase = value,
-            "cameraman" | "freecam" | "free_camera" => config.cameraman = value,
-            "top" | "spawn" => {
-                log(&format!(
-                    "autodirector_camera_fix: config key '{}' is not independently detectable yet; use fixed=false to disable this family",
-                    key
-                ));
-            }
-            _ => {
-                log(&format!(
-                    "autodirector_camera_fix: ignoring unknown config key '{}'",
-                    key
-                ));
-            }
-        }
-    }
-
-    config.refresh_disabled_mask();
-    Ok(config)
-}
-
-fn parse_bool(value: &str) -> Option<bool> {
-    match value {
-        "true" => Some(true),
-        "false" => Some(false),
-        _ => None,
-    }
-}
-
-fn emit_restore_saved_registers(code: &mut Vec<u8>) {
-    code.extend_from_slice(&[
-        0x5b, // pop rbx
-        0x41, 0x5b, // pop r11
-        0x41, 0x5a, // pop r10
-        0x41, 0x59, // pop r9
-        0x41, 0x58, // pop r8
-        0x5a, // pop rdx
-        0x59, // pop rcx
-        0x58, // pop rax
-    ]);
-}
-
-fn emit_mov_rax_imm64(code: &mut Vec<u8>, value: usize) {
-    code.extend_from_slice(&[0x48, 0xb8]);
-    code.extend_from_slice(&(value as u64).to_le_bytes());
-}
-
-fn emit_absolute_jump(code: &mut Vec<u8>, target: usize) {
-    code.extend_from_slice(&[0xff, 0x25, 0, 0, 0, 0]);
-    code.extend_from_slice(&(target as u64).to_le_bytes());
 }
 
 unsafe fn original_call_target(patch_address: usize) -> usize {
@@ -656,53 +482,6 @@ unsafe fn write_bytes(address: usize, bytes: &[u8]) -> bool {
     true
 }
 
-#[derive(Debug, PartialEq, Eq)]
-struct PatternSearch {
-    matches: usize,
-    unique_offset: Option<usize>,
-}
-
-fn find_pattern(data: &[u8], pattern: &[Option<u8>]) -> PatternSearch {
-    if data.len() < pattern.len() {
-        return PatternSearch {
-            matches: 0,
-            unique_offset: None,
-        };
-    }
-
-    let mut matches = 0;
-    let mut unique_offset = None;
-
-    for (offset, window) in data.windows(pattern.len()).enumerate() {
-        if !bytes_match(window, pattern) {
-            continue;
-        }
-
-        matches += 1;
-        unique_offset = if matches == 1 { Some(offset) } else { None };
-    }
-
-    PatternSearch {
-        matches,
-        unique_offset,
-    }
-}
-
-fn bytes_match(data: &[u8], pattern: &[Option<u8>]) -> bool {
-    if data.len() != pattern.len() {
-        return false;
-    }
-
-    for (offset, expected) in pattern.iter().enumerate() {
-        if let Some(byte) = expected
-            && data[offset] != *byte
-        {
-            return false;
-        }
-    }
-    true
-}
-
 unsafe fn read_u16(address: usize) -> u16 {
     unsafe { (address as *const u16).read_unaligned() }
 }
@@ -818,88 +597,4 @@ unsafe extern "system" {
     ) -> i32;
     fn FlushInstructionCache(process: Handle, base_address: *const c_void, size: usize) -> i32;
     fn GetCurrentProcess() -> Handle;
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        AUTODIRECTOR_MODE_CAMERAMAN, AUTODIRECTOR_MODE_CHASE, AUTODIRECTOR_MODE_FIRST_PERSON,
-        CameraConfig, PatternSearch, bytes_match, find_pattern, parse_config,
-    };
-
-    #[test]
-    fn matches_wildcard_pattern() {
-        let pattern = [Some(0xe8), None, None, Some(0x48)];
-
-        assert!(bytes_match(&[0xe8, 0x11, 0x22, 0x48], &pattern));
-        assert!(!bytes_match(&[0xe8, 0x11, 0x22, 0x49], &pattern));
-    }
-
-    #[test]
-    fn finds_unique_pattern_match() {
-        let data = [0x90, 0xe8, 0x01, 0x48, 0x90];
-        let pattern = [Some(0xe8), None, Some(0x48)];
-
-        assert_eq!(
-            find_pattern(&data, &pattern),
-            PatternSearch {
-                matches: 1,
-                unique_offset: Some(1),
-            }
-        );
-    }
-
-    #[test]
-    fn rejects_ambiguous_pattern_matches() {
-        let data = [0x90, 0xe8, 0x01, 0x48, 0xe8, 0x02, 0x48, 0x90];
-        let pattern = [Some(0xe8), None, Some(0x48)];
-
-        assert_eq!(
-            find_pattern(&data, &pattern),
-            PatternSearch {
-                matches: 2,
-                unique_offset: None,
-            }
-        );
-    }
-
-    #[test]
-    fn parses_camera_config() {
-        let config = parse_config(
-            r#"
-            [cameras]
-            first_person = false
-            chase = false
-            fixed = true
-            cameraman = true
-            "#,
-        )
-        .unwrap();
-
-        assert_eq!(
-            config,
-            CameraConfig {
-                fixed: true,
-                first_person: false,
-                chase: false,
-                cameraman: true,
-                disabled_mask: (1 << AUTODIRECTOR_MODE_FIRST_PERSON)
-                    | (1 << AUTODIRECTOR_MODE_CHASE),
-            }
-        );
-    }
-
-    #[test]
-    fn supports_camera_config_aliases() {
-        let config = parse_config(
-            r#"
-            [cameras]
-            in_eye = true
-            free_camera = false
-            "#,
-        )
-        .unwrap();
-
-        assert_eq!(config.disabled_mask, 1 << AUTODIRECTOR_MODE_CAMERAMAN);
-    }
 }

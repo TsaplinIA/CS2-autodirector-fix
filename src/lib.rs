@@ -1,6 +1,9 @@
 #![allow(non_snake_case)]
 
+mod config;
+mod pattern;
 mod runtime;
+mod trampoline;
 
 use std::ffi::c_void;
 
