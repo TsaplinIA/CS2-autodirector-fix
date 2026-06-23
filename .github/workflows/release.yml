@@ -2,12 +2,17 @@ name: Release
 
 on:
   workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - ".github/workflows/release.yml"
 
 permissions:
   contents: write
 
 jobs:
   release:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
 
     steps:
