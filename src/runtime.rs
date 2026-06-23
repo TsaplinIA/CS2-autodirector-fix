@@ -13,10 +13,21 @@ use crate::trampoline::{build_conditional_trampoline, emit_absolute_jump};
 type HModule = *mut c_void;
 type Handle = *mut c_void;
 type Tier0Msg = unsafe extern "C" fn(format: *const c_char, ...);
+type Tier0ColorMsg = unsafe extern "C" fn(color: ConsoleColor, format: *const c_char, ...);
 
 const CLIENT_DLL: &CStr = c"client.dll";
 const TIER0_DLL: &CStr = c"tier0.dll";
 const TIER0_MSG_EXPORT: &CStr = c"Msg";
+const TIER0_CON_COLOR_MSG_EXPORT: &CStr = c"ConColorMsg";
+const TIER0_COLOR_MSG_EXPORT: &CStr = c"ColorMsg";
+const LOG_PREFIX: &str = "[autodirector-fix]";
+const OLD_LOG_PREFIX: &str = "autodirector_camera_fix: ";
+const LOG_COLOR: ConsoleColor = ConsoleColor {
+    r: 80,
+    g: 200,
+    b: 120,
+    a: 255,
+};
 const GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS: u32 = 0x0000_0004;
 
 // Inside view.cpp FUN_180b77d20. This block is only reached when
@@ -80,6 +91,15 @@ static DISABLED_CAMERA_MASK: AtomicU32 = AtomicU32::new(DEFAULT_DISABLED_CAMERA_
 static PATCHED: AtomicBool = AtomicBool::new(false);
 static ORIGINAL_BYTES: [AtomicU8; AUTODIRECTOR_VIEW_OVERRIDE_PATCH_LEN] =
     [const { AtomicU8::new(0) }; AUTODIRECTOR_VIEW_OVERRIDE_PATCH_LEN];
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct ConsoleColor {
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+}
 
 pub(crate) unsafe fn process_attach(module: HModule) {
     MODULE_HANDLE.store(module, Ordering::SeqCst);
@@ -495,7 +515,12 @@ unsafe fn read_i32(address: usize) -> i32 {
 }
 
 fn log(message: &str) {
-    log_to_game_console(message);
+    let message = format!(
+        "{LOG_PREFIX} {}",
+        message.strip_prefix(OLD_LOG_PREFIX).unwrap_or(message)
+    );
+
+    log_to_game_console(&message);
 
     let Some(path) = module_log_path() else {
         return;
@@ -525,9 +550,21 @@ fn log_to_game_console(message: &str) {
         return;
     }
 
-    let msg: Tier0Msg = unsafe { std::mem::transmute(msg) };
+    let color_msg = unsafe { GetProcAddress(tier0, TIER0_CON_COLOR_MSG_EXPORT.as_ptr()) };
+    let color_msg = if color_msg.is_null() {
+        unsafe { GetProcAddress(tier0, TIER0_COLOR_MSG_EXPORT.as_ptr()) }
+    } else {
+        color_msg
+    };
+
     unsafe {
-        msg(c"%s".as_ptr(), message.as_ptr());
+        if color_msg.is_null() {
+            let msg: Tier0Msg = std::mem::transmute(msg);
+            msg(c"%s".as_ptr(), message.as_ptr());
+        } else {
+            let color_msg: Tier0ColorMsg = std::mem::transmute(color_msg);
+            color_msg(LOG_COLOR, c"%s".as_ptr(), message.as_ptr());
+        }
     }
 }
 
