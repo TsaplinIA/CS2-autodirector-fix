@@ -1,0 +1,16 @@
+[package]
+name = "cs2-autodirector-fix"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Experimental CS2 autodirector first-person camera fix DLL for HLAE mirv_loadbinary."
+
+[lib]
+name = "autodirector_camera_fix"
+crate-type = ["cdylib"]
+
+[profile.release]
+panic = "abort"
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
