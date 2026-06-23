@@ -1,0 +1,43 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Resolve version
+        id: version
+        shell: pwsh
+        run: |
+          $version = .\.github\scripts\resolve-release-version.ps1
+          "value=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Resolved release version: $version"
+
+      - name: Package
+        shell: pwsh
+        run: .\.github\scripts\package.ps1 -Version "${{ steps.version.outputs.value }}"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.value }}
+          name: CS2 Autodirector Fix ${{ steps.version.outputs.value }}
+          files: |
+            autodirector-fix-${{ steps.version.outputs.value }}.zip
+            source_code-${{ steps.version.outputs.value }}.zip
