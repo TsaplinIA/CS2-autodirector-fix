@@ -6,7 +6,6 @@ $ErrorActionPreference = "Stop"
 $repo = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 $dist = Join-Path $repo "dist"
 $payloadDir = Join-Path $dist "autodirector-fix"
-$sourceDir = Join-Path $dist "source_code"
 $releaseDir = Join-Path $repo "target\release"
 $dll = Join-Path $releaseDir "autodirector_fix.dll"
 $config = Join-Path $repo "autodirector-fix-config.toml"
@@ -42,49 +41,10 @@ function Resolve-PackageVersion {
     return $Version
 }
 
-function Copy-SourceTree {
-    param([string]$Destination)
-
-    $excludedDirs = @(
-        ".git",
-        ".github",
-        ".idea",
-        ".vs",
-        ".vscode",
-        "scripts",
-        "target",
-        "dist"
-    )
-    $excludedFiles = @(
-        "*.zip",
-        ".gitignore",
-        "AUTODIRECTOR_REVERSE_SUMMARY_RU.md"
-    )
-
-    Get-ChildItem -LiteralPath $repo -Force | ForEach-Object {
-        if ($_.PSIsContainer -and ($excludedDirs -contains $_.Name)) {
-            return
-        }
-        if (-not $_.PSIsContainer) {
-            foreach ($excludedFile in $excludedFiles) {
-                if ($_.Name -like $excludedFile) {
-                    return
-                }
-            }
-        }
-        if (-not $_.PSIsContainer -and ($excludedFiles -contains $_.Name)) {
-            return
-        }
-
-        Copy-Item -LiteralPath $_.FullName -Destination $Destination -Recurse -Force
-    }
-}
-
 Push-Location $repo
 try {
     $resolvedVersion = Resolve-PackageVersion -Version $Version
     $payloadZip = Join-Path $repo "autodirector-fix-$resolvedVersion.zip"
-    $sourceZip = Join-Path $repo "source_code-$resolvedVersion.zip"
 
     cargo build --release
 
@@ -96,7 +56,6 @@ try {
         Remove-Item -LiteralPath $dist -Recurse -Force
     }
     New-Item -ItemType Directory -Path $payloadDir | Out-Null
-    New-Item -ItemType Directory -Path $sourceDir | Out-Null
 
     Copy-Item -LiteralPath $dll -Destination (Join-Path $payloadDir "autodirector-fix-$resolvedVersion.dll")
     if (Test-Path $config) {
@@ -106,14 +65,10 @@ try {
     Get-ChildItem -LiteralPath $repo -File -Filter "autodirector-fix*.zip" | Remove-Item -Force
     Get-ChildItem -LiteralPath $repo -File -Filter "source_code*.zip" | Remove-Item -Force
 
-    Copy-SourceTree -Destination $sourceDir
-
     Compress-Archive -Path (Join-Path $payloadDir "*") -DestinationPath $payloadZip
-    Compress-Archive -Path (Join-Path $sourceDir "*") -DestinationPath $sourceZip
 
     Write-Host "Package version: $resolvedVersion"
     Write-Host "Package created: $payloadZip"
-    Write-Host "Package created: $sourceZip"
 } finally {
     Pop-Location
 }

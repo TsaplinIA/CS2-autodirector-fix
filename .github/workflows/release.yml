@@ -45,4 +45,3 @@ jobs:
           name: CS2 Autodirector Fix ${{ steps.version.outputs.value }}
           files: |
             autodirector-fix-${{ steps.version.outputs.value }}.zip
-            source_code-${{ steps.version.outputs.value }}.zip
