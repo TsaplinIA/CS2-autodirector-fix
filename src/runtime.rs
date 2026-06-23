@@ -3,7 +3,7 @@
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::ptr::null_mut;
 use std::slice;
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, AtomicUsize, Ordering};
 use std::time::Instant;
 
 type HModule = *mut c_void;
@@ -19,6 +19,10 @@ const GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS: u32 = 0x0000_0004;
 // spec_autodirector is enabled and the local observer state exists. It calls
 // observerState->vfunc_0x28(viewSetup), then jumps over the normal camera setup.
 const AUTODIRECTOR_VIEW_OVERRIDE_PATCH_LEN: usize = 26;
+const AUTODIRECTOR_VIEW_OVERRIDE_JMP_OFFSET: usize = 21;
+const AUTODIRECTOR_VIEW_OVERRIDE_JMP_LEN: usize = 5;
+const AUTODIRECTOR_FIRST_PERSON_MODE: i32 = 2;
+const AUTODIRECTOR_MODE_OFFSET: i32 = 0x38;
 const AUTODIRECTOR_VIEW_OVERRIDE_PATTERN: &[Option<u8>] = &[
     Some(0xe8), // call FUN_180b0f460
     None,
@@ -61,9 +65,15 @@ const SECTION_VIRTUAL_ADDRESS_OFFSET: usize = 0x0c;
 const SECTION_SIZE_OF_RAW_DATA_OFFSET: usize = 0x10;
 const TEXT_SECTION_NAME: &[u8; SECTION_NAME_SIZE] = b".text\0\0\0";
 const PAGE_EXECUTE_READWRITE: u32 = 0x40;
+const PAGE_EXECUTE_READ: u32 = 0x20;
+const MEM_COMMIT: u32 = 0x0000_1000;
+const MEM_RESERVE: u32 = 0x0000_2000;
+const MEM_RELEASE: u32 = 0x0000_8000;
 
 static MODULE_HANDLE: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
 static PATCH_ADDRESS: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
+static TRAMPOLINE_ADDRESS: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
+static TRAMPOLINE_LEN: AtomicUsize = AtomicUsize::new(0);
 static PATCHED: AtomicBool = AtomicBool::new(false);
 static ORIGINAL_BYTES: [AtomicU8; AUTODIRECTOR_VIEW_OVERRIDE_PATCH_LEN] =
     [const { AtomicU8::new(0) }; AUTODIRECTOR_VIEW_OVERRIDE_PATCH_LEN];
@@ -146,19 +156,167 @@ unsafe fn initialize_patch(client: HModule) {
         original_byte.store(byte, Ordering::SeqCst);
     }
 
-    if unsafe { write_nops(patch_address, AUTODIRECTOR_VIEW_OVERRIDE_PATCH_LEN) } {
+    if unsafe { write_conditional_patch(patch_address) } {
         PATCH_ADDRESS.store(patch_address as *mut c_void, Ordering::SeqCst);
         PATCHED.store(true, Ordering::SeqCst);
         log(&format!(
-            "autodirector_camera_fix: patched autodirector view override client={:#x} address={:#x} len={}",
-            client as usize, patch_address, AUTODIRECTOR_VIEW_OVERRIDE_PATCH_LEN
+            "autodirector_camera_fix: patched autodirector view override client={:#x} address={:#x} len={} mode_filter={}",
+            client as usize,
+            patch_address,
+            AUTODIRECTOR_VIEW_OVERRIDE_PATCH_LEN,
+            AUTODIRECTOR_FIRST_PERSON_MODE
         ));
     } else {
+        unsafe {
+            free_trampoline();
+        }
         log(&format!(
             "autodirector_camera_fix: failed to patch autodirector view override address={:#x}",
             patch_address
         ));
     }
+}
+
+unsafe fn write_conditional_patch(patch_address: usize) -> bool {
+    let Some(trampoline) = (unsafe { allocate_trampoline(patch_address) }) else {
+        return false;
+    };
+
+    let mut patch = Vec::with_capacity(AUTODIRECTOR_VIEW_OVERRIDE_PATCH_LEN);
+    emit_absolute_jump(&mut patch, trampoline.as_ptr() as usize);
+    patch.resize(AUTODIRECTOR_VIEW_OVERRIDE_PATCH_LEN, 0x90);
+
+    if unsafe { write_bytes(patch_address, &patch) } {
+        TRAMPOLINE_ADDRESS.store(trampoline.as_mut_ptr().cast::<c_void>(), Ordering::SeqCst);
+        TRAMPOLINE_LEN.store(trampoline.len(), Ordering::SeqCst);
+        log(&format!(
+            "autodirector_camera_fix: installed conditional trampoline address={:#x} len={}",
+            trampoline.as_ptr() as usize,
+            trampoline.len()
+        ));
+        true
+    } else {
+        unsafe {
+            VirtualFree(trampoline.as_mut_ptr().cast::<c_void>(), 0, MEM_RELEASE);
+        }
+        false
+    }
+}
+
+unsafe fn allocate_trampoline(patch_address: usize) -> Option<&'static mut [u8]> {
+    let original_jump_target = unsafe { original_override_jump_target(patch_address) };
+    let normal_setup_address = patch_address + AUTODIRECTOR_VIEW_OVERRIDE_PATCH_LEN;
+    let get_observer_state = unsafe { original_call_target(patch_address) };
+
+    let code = build_conditional_trampoline(
+        get_observer_state,
+        normal_setup_address,
+        original_jump_target,
+    );
+
+    let memory = unsafe {
+        VirtualAlloc(
+            null_mut(),
+            code.len(),
+            MEM_COMMIT | MEM_RESERVE,
+            PAGE_EXECUTE_READWRITE,
+        )
+    };
+    if memory.is_null() {
+        return None;
+    }
+
+    unsafe {
+        std::ptr::copy_nonoverlapping(code.as_ptr(), memory.cast::<u8>(), code.len());
+        let mut old_protect = 0u32;
+        VirtualProtect(memory, code.len(), PAGE_EXECUTE_READ, &mut old_protect);
+        FlushInstructionCache(GetCurrentProcess(), memory, code.len());
+        Some(slice::from_raw_parts_mut(memory.cast::<u8>(), code.len()))
+    }
+}
+
+fn build_conditional_trampoline(
+    get_observer_state: usize,
+    normal_setup_address: usize,
+    original_jump_target: usize,
+) -> Vec<u8> {
+    let mut code = Vec::with_capacity(128);
+
+    code.extend_from_slice(&[
+        0x50, // push rax
+        0x51, // push rcx
+        0x52, // push rdx
+        0x41, 0x50, // push r8
+        0x41, 0x51, // push r9
+        0x41, 0x52, // push r10
+        0x41, 0x53, // push r11
+        0x53, // push rbx
+    ]);
+
+    emit_mov_rax_imm64(&mut code, get_observer_state);
+    code.extend_from_slice(&[0xff, 0xd0]); // call rax
+    code.extend_from_slice(&[0x83, 0x78, AUTODIRECTOR_MODE_OFFSET as u8]);
+    code.push(AUTODIRECTOR_FIRST_PERSON_MODE as u8); // cmp dword ptr [rax+0x38], 2
+
+    let jne_offset_position = code.len() + 2;
+    code.extend_from_slice(&[0x0f, 0x85, 0, 0, 0, 0]); // jne original_path
+
+    emit_restore_saved_registers(&mut code);
+    emit_absolute_jump(&mut code, normal_setup_address);
+
+    let original_path_offset = code.len();
+    emit_restore_saved_registers(&mut code);
+    emit_mov_rax_imm64(&mut code, get_observer_state);
+    code.extend_from_slice(&[0xff, 0xd0]); // call rax
+    code.extend_from_slice(&[
+        0x48, 0x8b, 0xd6, // mov rdx, rsi
+        0x48, 0x8b, 0x08, // mov rcx, [rax]
+        0x4c, 0x8b, 0x41, 0x28, // mov r8, [rcx+28h]
+        0x48, 0x8b, 0xc8, // mov rcx, rax
+        0x41, 0xff, 0xd0, // call r8
+    ]);
+    emit_absolute_jump(&mut code, original_jump_target);
+
+    let after_jne = jne_offset_position + 4;
+    let relative = original_path_offset as isize - after_jne as isize;
+    code[jne_offset_position..jne_offset_position + 4]
+        .copy_from_slice(&(relative as i32).to_le_bytes());
+
+    code
+}
+
+fn emit_restore_saved_registers(code: &mut Vec<u8>) {
+    code.extend_from_slice(&[
+        0x5b, // pop rbx
+        0x41, 0x5b, // pop r11
+        0x41, 0x5a, // pop r10
+        0x41, 0x59, // pop r9
+        0x41, 0x58, // pop r8
+        0x5a, // pop rdx
+        0x59, // pop rcx
+        0x58, // pop rax
+    ]);
+}
+
+fn emit_mov_rax_imm64(code: &mut Vec<u8>, value: usize) {
+    code.extend_from_slice(&[0x48, 0xb8]);
+    code.extend_from_slice(&(value as u64).to_le_bytes());
+}
+
+fn emit_absolute_jump(code: &mut Vec<u8>, target: usize) {
+    code.extend_from_slice(&[0xff, 0x25, 0, 0, 0, 0]);
+    code.extend_from_slice(&(target as u64).to_le_bytes());
+}
+
+unsafe fn original_call_target(patch_address: usize) -> usize {
+    let rel32 = unsafe { read_i32(patch_address + 1) } as isize;
+    (patch_address + 5).wrapping_add_signed(rel32)
+}
+
+unsafe fn original_override_jump_target(patch_address: usize) -> usize {
+    let jump_address = patch_address + AUTODIRECTOR_VIEW_OVERRIDE_JMP_OFFSET;
+    let rel32 = unsafe { read_i32(jump_address + 1) } as isize;
+    (jump_address + AUTODIRECTOR_VIEW_OVERRIDE_JMP_LEN).wrapping_add_signed(rel32)
 }
 
 unsafe fn find_patch_address(client: HModule, scan_start: Instant) -> Option<usize> {
@@ -237,7 +395,7 @@ unsafe fn module_text_section<'a>(module_base: usize) -> Option<ModuleSection<'a
 }
 
 unsafe fn restore_patch() {
-    if !PATCHED.swap(false, Ordering::SeqCst) {
+    if !PATCHED.load(Ordering::SeqCst) {
         return;
     }
 
@@ -289,14 +447,31 @@ unsafe fn restore_patch() {
         "autodirector_camera_fix: restored autodirector view override address={:#x} len={}",
         address, AUTODIRECTOR_VIEW_OVERRIDE_PATCH_LEN
     ));
+
+    PATCHED.store(false, Ordering::SeqCst);
+    unsafe {
+        free_trampoline();
+    }
 }
 
-unsafe fn write_nops(address: usize, len: usize) -> bool {
+unsafe fn free_trampoline() {
+    let trampoline = TRAMPOLINE_ADDRESS.swap(null_mut(), Ordering::SeqCst);
+    if trampoline.is_null() {
+        return;
+    }
+
+    TRAMPOLINE_LEN.store(0, Ordering::SeqCst);
+    unsafe {
+        VirtualFree(trampoline, 0, MEM_RELEASE);
+    }
+}
+
+unsafe fn write_bytes(address: usize, bytes: &[u8]) -> bool {
     let mut old_protect = 0u32;
     let ok = unsafe {
         VirtualProtect(
             address as *mut c_void,
-            len,
+            bytes.len(),
             PAGE_EXECUTE_READWRITE,
             &mut old_protect,
         )
@@ -305,18 +480,18 @@ unsafe fn write_nops(address: usize, len: usize) -> bool {
         return false;
     }
 
-    for offset in 0..len {
+    for (offset, byte) in bytes.iter().enumerate() {
         unsafe {
-            (address as *mut u8).add(offset).write(0x90);
+            (address as *mut u8).add(offset).write(*byte);
         }
     }
 
     let mut restored_protect = 0u32;
     unsafe {
-        FlushInstructionCache(GetCurrentProcess(), address as *const c_void, len);
+        FlushInstructionCache(GetCurrentProcess(), address as *const c_void, bytes.len());
         VirtualProtect(
             address as *mut c_void,
-            len,
+            bytes.len(),
             old_protect,
             &mut restored_protect,
         );
@@ -378,6 +553,10 @@ unsafe fn read_u16(address: usize) -> u16 {
 
 unsafe fn read_u32(address: usize) -> u32 {
     unsafe { (address as *const u32).read_unaligned() }
+}
+
+unsafe fn read_i32(address: usize) -> i32 {
+    unsafe { (address as *const i32).read_unaligned() }
 }
 
 fn log(message: &str) {
@@ -460,6 +639,13 @@ unsafe extern "system" {
     fn FreeLibraryAndExitThread(module: HModule, exit_code: u32);
     fn GetProcAddress(module: HModule, proc_name: *const c_char) -> *mut c_void;
     fn GetModuleFileNameA(module: HModule, filename: *mut c_char, size: u32) -> u32;
+    fn VirtualAlloc(
+        address: *mut c_void,
+        size: usize,
+        allocation_type: u32,
+        protect: u32,
+    ) -> *mut c_void;
+    fn VirtualFree(address: *mut c_void, size: usize, free_type: u32) -> i32;
     fn VirtualProtect(
         address: *mut c_void,
         size: usize,
