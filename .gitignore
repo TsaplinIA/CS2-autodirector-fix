@@ -16,3 +16,9 @@ Desktop.ini
 
 /dist/
 *.zip
+
+/tools/demo-events/.venv/
+/tools/demo-events/.idea/
+/tools/demo-events/__pycache__/
+/tools/demo-events/*.csv
+/tools/demo-events/*.jsonl
