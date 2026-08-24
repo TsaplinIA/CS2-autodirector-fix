@@ -24,7 +24,7 @@ first-person bugs make the picture look broken.
 
 This project is a small fix for those bugs. It is distributed as a DLL: load it
 into CS2, for example through [HLAE](https://github.com/advancedfx/advancedfx)
-with `mirv_loadbinary`, and the weapon jitter / view jumps on the autodirector
+with `mirv_loadlibrary`, and the weapon jitter / view jumps on the autodirector
 first-person path should disappear.
 
 Star us on GitHub - your support motivates us a lot! It also helps other
@@ -47,7 +47,7 @@ https://github.com/user-attachments/assets/fb6fc08f-caeb-4a60-a67f-e452e088758a
 4. In the HLAE / CS2 console, load the DLL:
 
 ```text
-mirv_loadbinary "C:\path\to\autodirector-fix-vX.Y.Z.dll"
+mirv_loadlibrary "C:\path\to\autodirector-fix-vX.Y.Z.dll"
 ```
 
 Usage preview WebP will be added later.
@@ -90,7 +90,7 @@ target\release\autodirector_fix.dll
 ```
 
 For local manual testing, keep `autodirector-fix-config.toml` next to the DLL
-you load with `mirv_loadbinary`.
+you load with `mirv_loadlibrary`.
 
 ### Contacts
 
@@ -112,7 +112,7 @@ For now, you can contact the author on Telegram: [@Cool8ilya](https://t.me/Cool8
 
 Этот проект - небольшой фикс для этих багов. Он поставляется как DLL: загрузи
 ее в CS2, например через [HLAE](https://github.com/advancedfx/advancedfx)
-командой `mirv_loadbinary`, и подергивания оружия / прыжки камеры на пути
+командой `mirv_loadlibrary`, и подергивания оружия / прыжки камеры на пути
 автодиректора от первого лица должны пропасть.
 
 Поставь звезду на GitHub - твоя поддержка очень мотивирует! Так другим людям
@@ -133,7 +133,7 @@ https://github.com/user-attachments/assets/fb6fc08f-caeb-4a60-a67f-e452e088758a
 4. В консоли HLAE / CS2 загрузи DLL:
 
 ```text
-mirv_loadbinary "C:\path\to\autodirector-fix-vX.Y.Z.dll"
+mirv_loadlibrary "C:\path\to\autodirector-fix-vX.Y.Z.dll"
 ```
 
 WebP-пример загрузки через HLAE будет добавлен позже.
@@ -177,7 +177,7 @@ target\release\autodirector_fix.dll
 ```
 
 Для ручного локального теста положи `autodirector-fix-config.toml` рядом с DLL,
-которую загружаешь через `mirv_loadbinary`.
+которую загружаешь через `mirv_loadlibrary`.
 
 ### Контакты
 
