@@ -4,6 +4,8 @@ pub(crate) const MODE_CHASE: u32 = 3;
 pub(crate) const MODE_CAMERAMAN: u32 = 4;
 
 pub(crate) const DEFAULT_DISABLED_CAMERA_MASK: u32 = 1 << MODE_FIRST_PERSON;
+pub(crate) const DEFAULT_DIRECTOR_HOLD_MS: u64 = 2500;
+pub(crate) const DEFAULT_SNAPSHOT_INTERVAL_MS: u64 = 500;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CameraConfig {
@@ -12,6 +14,18 @@ pub(crate) struct CameraConfig {
     pub(crate) chase: bool,
     pub(crate) cameraman: bool,
     pub(crate) disabled_mask: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DirectorConfig {
+    pub(crate) enabled: bool,
+    pub(crate) hold_ms: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SnapshotConfig {
+    pub(crate) enabled: bool,
+    pub(crate) interval_ms: u64,
 }
 
 impl Default for CameraConfig {
@@ -26,16 +40,38 @@ impl Default for CameraConfig {
     }
 }
 
+impl Default for DirectorConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            hold_ms: DEFAULT_DIRECTOR_HOLD_MS,
+        }
+    }
+}
+
+impl Default for SnapshotConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            interval_ms: DEFAULT_SNAPSHOT_INTERVAL_MS,
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct ParsedConfig {
     pub(crate) config: CameraConfig,
+    pub(crate) director: DirectorConfig,
+    pub(crate) snapshot: SnapshotConfig,
     pub(crate) warnings: Vec<String>,
 }
 
 pub(crate) fn parse_config(contents: &str) -> Result<ParsedConfig, String> {
     let mut config = CameraConfig::default();
+    let mut director = DirectorConfig::default();
+    let mut snapshot = SnapshotConfig::default();
     let mut warnings = Vec::new();
-    let mut in_cameras = false;
+    let mut section = "";
 
     for (line_index, raw_line) in contents.lines().enumerate() {
         let line = raw_line
@@ -47,11 +83,11 @@ pub(crate) fn parse_config(contents: &str) -> Result<ParsedConfig, String> {
         }
 
         if line.starts_with('[') && line.ends_with(']') {
-            in_cameras = line == "[cameras]";
+            section = &line[1..line.len() - 1];
             continue;
         }
 
-        if !in_cameras {
+        if section.is_empty() {
             continue;
         }
 
@@ -59,25 +95,62 @@ pub(crate) fn parse_config(contents: &str) -> Result<ParsedConfig, String> {
             return Err(format!("line {}: expected key = value", line_index + 1));
         };
         let key = key.trim();
-        let value = parse_bool(value.trim())
-            .ok_or_else(|| format!("line {}: expected true or false", line_index + 1))?;
+        let value = value.trim();
 
-        match key {
-            "fixed" | "point_camera" => config.fixed = value,
-            "first_person" | "first-person" | "ineye" | "in_eye" => {
-                config.first_person = value;
+        match section {
+            "cameras" => {
+                let value = parse_bool(value)
+                    .ok_or_else(|| format!("line {}: expected true or false", line_index + 1))?;
+                match key {
+                    "fixed" | "point_camera" => config.fixed = value,
+                    "first_person" | "first-person" | "ineye" | "in_eye" => {
+                        config.first_person = value;
+                    }
+                    "chase" => config.chase = value,
+                    "cameraman" | "freecam" | "free_camera" => config.cameraman = value,
+                    "top" | "spawn" => warnings.push(format!(
+                        "config key '{key}' is not independently detectable yet; use fixed=false to disable this family"
+                    )),
+                    _ => warnings.push(format!("ignoring unknown config key '{key}'")),
+                }
             }
-            "chase" => config.chase = value,
-            "cameraman" | "freecam" | "free_camera" => config.cameraman = value,
-            "top" | "spawn" => warnings.push(format!(
-                "config key '{key}' is not independently detectable yet; use fixed=false to disable this family"
-            )),
-            _ => warnings.push(format!("ignoring unknown config key '{key}'")),
+            "director" => match key {
+                "enabled" => {
+                    director.enabled = parse_bool(value).ok_or_else(|| {
+                        format!("line {}: expected true or false", line_index + 1)
+                    })?;
+                }
+                "hold_ms" => {
+                    director.hold_ms = value
+                        .parse::<u64>()
+                        .map_err(|_| format!("line {}: expected integer", line_index + 1))?;
+                }
+                _ => warnings.push(format!("ignoring unknown director config key '{key}'")),
+            },
+            "snapshot" => match key {
+                "enabled" => {
+                    snapshot.enabled = parse_bool(value).ok_or_else(|| {
+                        format!("line {}: expected true or false", line_index + 1)
+                    })?;
+                }
+                "interval_ms" => {
+                    snapshot.interval_ms = value
+                        .parse::<u64>()
+                        .map_err(|_| format!("line {}: expected integer", line_index + 1))?;
+                }
+                _ => warnings.push(format!("ignoring unknown snapshot config key '{key}'")),
+            },
+            _ => {}
         }
     }
 
     config.refresh_disabled_mask();
-    Ok(ParsedConfig { config, warnings })
+    Ok(ParsedConfig {
+        config,
+        director,
+        snapshot,
+        warnings,
+    })
 }
 
 fn parse_bool(value: &str) -> Option<bool> {
@@ -109,7 +182,8 @@ impl CameraConfig {
 #[cfg(test)]
 mod tests {
     use super::{
-        CameraConfig, MODE_CAMERAMAN, MODE_CHASE, MODE_FIRST_PERSON, ParsedConfig, parse_config,
+        CameraConfig, DirectorConfig, MODE_CAMERAMAN, MODE_CHASE, MODE_FIRST_PERSON, ParsedConfig,
+        SnapshotConfig, parse_config,
     };
 
     #[test]
@@ -135,6 +209,8 @@ mod tests {
                     cameraman: true,
                     disabled_mask: (1 << MODE_FIRST_PERSON) | (1 << MODE_CHASE),
                 },
+                director: DirectorConfig::default(),
+                snapshot: SnapshotConfig::default(),
                 warnings: Vec::new(),
             }
         );
@@ -155,8 +231,52 @@ mod tests {
     }
 
     #[test]
+    fn parses_director_config() {
+        let parsed = parse_config(
+            r#"
+            [director]
+            enabled = true
+            hold_ms = 1500
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            parsed.director,
+            DirectorConfig {
+                enabled: true,
+                hold_ms: 1500
+            }
+        );
+    }
+
+    #[test]
+    fn parses_snapshot_config() {
+        let parsed = parse_config(
+            r#"
+            [snapshot]
+            enabled = true
+            interval_ms = 250
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            parsed.snapshot,
+            SnapshotConfig {
+                enabled: true,
+                interval_ms: 250
+            }
+        );
+    }
+
+    #[test]
     fn keeps_defaults_for_empty_config() {
-        assert_eq!(parse_config("").unwrap().config, CameraConfig::default());
+        let parsed = parse_config("").unwrap();
+
+        assert_eq!(parsed.config, CameraConfig::default());
+        assert_eq!(parsed.director, DirectorConfig::default());
+        assert_eq!(parsed.snapshot, SnapshotConfig::default());
     }
 
     #[test]
