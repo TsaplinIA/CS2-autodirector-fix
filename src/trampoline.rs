@@ -38,7 +38,7 @@ pub(crate) fn build_conditional_trampoline(
     emit_restore_saved_registers(&mut code);
     emit_mov_rax_imm64(&mut code, get_observer_state);
     code.extend_from_slice(&[0xff, 0xd0]); // call rax
-    code.extend_from_slice(&view_setup_argument_move); // mov rdx,<original viewSetup register>
+    code.extend_from_slice(&view_setup_argument_move); // mov rdx,rsi or mov rdx,r14
     code.extend_from_slice(&[
         0x48, 0x8b, 0x08, // mov rcx, [rax]
         0x4c, 0x8b, 0x41, 0x28, // mov r8, [rcx+28h]
@@ -107,7 +107,14 @@ mod tests {
     }
 
     #[test]
-    fn conditional_trampoline_replays_the_current_view_setup_register_move() {
+    fn conditional_trampoline_replays_current_view_setup_register_move() {
+        let code = build_conditional_trampoline(0x1000, 0x2000, 0x3000, [0x49, 0x8b, 0xd6], 0b0100);
+
+        assert!(code.windows(3).any(|window| window == [0x49, 0x8b, 0xd6]));
+    }
+
+    #[test]
+    fn conditional_trampoline_replays_rbx_view_setup_register_move() {
         let code = build_conditional_trampoline(0x1000, 0x2000, 0x3000, [0x48, 0x8b, 0xd3], 0b0100);
 
         assert!(code.windows(3).any(|window| window == [0x48, 0x8b, 0xd3]));
