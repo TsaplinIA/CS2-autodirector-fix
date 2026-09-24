@@ -112,4 +112,11 @@ mod tests {
 
         assert!(code.windows(3).any(|window| window == [0x49, 0x8b, 0xd6]));
     }
+
+    #[test]
+    fn conditional_trampoline_replays_rbx_view_setup_register_move() {
+        let code = build_conditional_trampoline(0x1000, 0x2000, 0x3000, [0x48, 0x8b, 0xd3], 0b0100);
+
+        assert!(code.windows(3).any(|window| window == [0x48, 0x8b, 0xd3]));
+    }
 }

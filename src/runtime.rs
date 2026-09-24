@@ -47,46 +47,17 @@ const GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS: u32 = 0x0000_0004;
 const AUTODIRECTOR_VIEW_OVERRIDE_PATCH_LEN: usize = 26;
 const AUTODIRECTOR_VIEW_OVERRIDE_JMP_OFFSET: usize = 21;
 const AUTODIRECTOR_VIEW_OVERRIDE_JMP_LEN: usize = 5;
-// CS2 build 24828357 changed the view-setup source register from rsi to r14.
-// Keep the complete instruction sequence for each supported build variant: the
-// trampoline has to replay that move exactly when it takes the original path.
-const AUTODIRECTOR_VIEW_OVERRIDE_RSI_PATTERN: &[Option<u8>] = &[
+// The register that holds viewSetup changes between CS2 builds (rsi, r14,
+// rbx). The exact three-byte move is validated and replayed by the trampoline.
+const AUTODIRECTOR_VIEW_OVERRIDE_PATTERN: &[Option<u8>] = &[
     Some(0xe8), // call FUN_180b0f460
     None,
     None,
     None,
     None,
-    Some(0x48),
+    None, // REX.W: mov rdx, a general-purpose register
     Some(0x8b),
-    Some(0xd6), // mov rdx,rsi
-    Some(0x48),
-    Some(0x8b),
-    Some(0x08), // mov rcx,[rax]
-    Some(0x4c),
-    Some(0x8b),
-    Some(0x41),
-    Some(0x28), // mov r8,[rcx+28h]
-    Some(0x48),
-    Some(0x8b),
-    Some(0xc8), // mov rcx,rax
-    Some(0x41),
-    Some(0xff),
-    Some(0xd0), // call r8
-    Some(0xe9), // jmp past normal view setup
-    None,
-    None,
-    None,
-    None,
-];
-const AUTODIRECTOR_VIEW_OVERRIDE_R14_PATTERN: &[Option<u8>] = &[
-    Some(0xe8), // call get observer state
-    None,
-    None,
-    None,
-    None,
-    Some(0x49),
-    Some(0x8b),
-    Some(0xd6), // mov rdx,r14
+    None, // ModRM must encode mov rdx,<source>; validated after matching
     Some(0x48),
     Some(0x8b),
     Some(0x08), // mov rcx,[rax]
@@ -105,10 +76,6 @@ const AUTODIRECTOR_VIEW_OVERRIDE_R14_PATTERN: &[Option<u8>] = &[
     None,
     None,
     None,
-];
-const AUTODIRECTOR_VIEW_OVERRIDE_PATTERNS: &[(&str, &[Option<u8>])] = &[
-    ("rsi", AUTODIRECTOR_VIEW_OVERRIDE_RSI_PATTERN),
-    ("r14", AUTODIRECTOR_VIEW_OVERRIDE_R14_PATTERN),
 ];
 const HLTV_EVENT_HANDLER_PATCH_LEN: usize = 18;
 const HLTV_EVENT_HANDLER_PATTERN: &[Option<u8>] = &[
@@ -769,51 +736,44 @@ unsafe fn original_view_setup_argument_move(patch_address: usize) -> Option<[u8;
         ]
     };
 
-    matches!(bytes, [0x48 | 0x49, 0x8b, 0xd6]).then_some(bytes)
+    let rex_w_with_optional_source_extension = matches!(bytes[0], 0x48 | 0x49);
+    let moves_a_register_into_rdx = bytes[1] == 0x8b && (bytes[2] & 0xf8) == 0xd0;
+    (rex_w_with_optional_source_extension && moves_a_register_into_rdx).then_some(bytes)
 }
 
 unsafe fn find_patch_address(client: HModule, scan_start: Instant) -> Option<usize> {
     let client = client as usize;
     let text = unsafe { module_text_section(client)? };
+    let search = find_pattern(text.data, AUTODIRECTOR_VIEW_OVERRIDE_PATTERN);
     let elapsed = scan_start.elapsed().as_secs_f64() * 1000.0;
-    let searches = AUTODIRECTOR_VIEW_OVERRIDE_PATTERNS
-        .iter()
-        .map(|(name, pattern)| (*name, find_pattern(text.data, pattern)))
-        .collect::<Vec<_>>();
-    let matches = searches
-        .iter()
-        .map(|(_, search)| search.matches)
-        .sum::<usize>();
-    let variants = searches
-        .iter()
-        .map(|(name, search)| format!("{name}_matches={}", search.matches))
-        .collect::<Vec<_>>()
-        .join(" ");
 
     log(&format!(
-        "scanned client.dll .text size={} matches={} {} elapsed_ms={elapsed:.3}",
+        "scanned client.dll .text size={} matches={} elapsed_ms={elapsed:.3}",
         text.data.len(),
-        matches,
-        variants
+        search.matches
     ));
 
-    let unique = searches
-        .iter()
-        .filter_map(|(name, search)| search.unique_offset.map(|offset| (*name, offset)))
-        .collect::<Vec<_>>();
-    if matches != 1 || unique.len() != 1 {
+    let Some(offset) = search.unique_offset else {
         log(&format!(
-            "expected one supported signature match in client.dll .text, found {}",
-            matches
+            "expected one signature match in client.dll .text, found {}",
+            search.matches
         ));
         return None;
-    }
-    let (variant, offset) = unique[0];
+    };
+
+    let patch_address = client + text.rva + offset;
+    let Some(view_setup_argument_move) =
+        (unsafe { original_view_setup_argument_move(patch_address) })
+    else {
+        log("matched autodirector signature has an unsupported viewSetup register move");
+        return None;
+    };
     log(&format!(
-        "resolved autodirector view override signature variant={variant}"
+        "resolved autodirector view override signature view_setup_move={:02x} {:02x} {:02x}",
+        view_setup_argument_move[0], view_setup_argument_move[1], view_setup_argument_move[2]
     ));
 
-    Some(client + text.rva + offset)
+    Some(patch_address)
 }
 
 unsafe fn find_unique_pattern_address(
