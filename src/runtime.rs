@@ -35,15 +35,17 @@ const GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS: u32 = 0x0000_0004;
 const AUTODIRECTOR_VIEW_OVERRIDE_PATCH_LEN: usize = 26;
 const AUTODIRECTOR_VIEW_OVERRIDE_JMP_OFFSET: usize = 21;
 const AUTODIRECTOR_VIEW_OVERRIDE_JMP_LEN: usize = 5;
+// The register that holds viewSetup changes between CS2 builds (rsi, r14,
+// rbx). The exact three-byte move is validated and replayed by the trampoline.
 const AUTODIRECTOR_VIEW_OVERRIDE_PATTERN: &[Option<u8>] = &[
     Some(0xe8), // call FUN_180b0f460
     None,
     None,
     None,
     None,
-    Some(0x48),
+    None, // REX.W: mov rdx, a general-purpose register
     Some(0x8b),
-    Some(0xd6), // mov rdx,rsi
+    None, // ModRM must encode mov rdx,<source>; validated after matching
     Some(0x48),
     Some(0x8b),
     Some(0x08), // mov rcx,[rax]
@@ -242,11 +244,13 @@ unsafe fn allocate_trampoline(
     let original_jump_target = unsafe { original_override_jump_target(patch_address) };
     let normal_setup_address = patch_address + AUTODIRECTOR_VIEW_OVERRIDE_PATCH_LEN;
     let get_observer_state = unsafe { original_call_target(patch_address) };
+    let view_setup_argument_move = unsafe { original_view_setup_argument_move(patch_address) }?;
 
     let code = build_conditional_trampoline(
         get_observer_state,
         normal_setup_address,
         original_jump_target,
+        view_setup_argument_move,
         disabled_mask,
     );
 
@@ -312,6 +316,21 @@ unsafe fn original_override_jump_target(patch_address: usize) -> usize {
     (jump_address + AUTODIRECTOR_VIEW_OVERRIDE_JMP_LEN).wrapping_add_signed(rel32)
 }
 
+unsafe fn original_view_setup_argument_move(patch_address: usize) -> Option<[u8; 3]> {
+    let move_address = patch_address + 5;
+    let bytes = unsafe {
+        [
+            (move_address as *const u8).read(),
+            (move_address as *const u8).add(1).read(),
+            (move_address as *const u8).add(2).read(),
+        ]
+    };
+
+    let rex_w_with_optional_source_extension = matches!(bytes[0], 0x48 | 0x49);
+    let moves_a_register_into_rdx = bytes[1] == 0x8b && (bytes[2] & 0xf8) == 0xd0;
+    (rex_w_with_optional_source_extension && moves_a_register_into_rdx).then_some(bytes)
+}
+
 unsafe fn find_patch_address(client: HModule, scan_start: Instant) -> Option<usize> {
     let client = client as usize;
     let text = unsafe { module_text_section(client)? };
@@ -332,7 +351,19 @@ unsafe fn find_patch_address(client: HModule, scan_start: Instant) -> Option<usi
         return None;
     };
 
-    Some(client + text.rva + offset)
+    let patch_address = client + text.rva + offset;
+    let Some(view_setup_argument_move) =
+        (unsafe { original_view_setup_argument_move(patch_address) })
+    else {
+        log("matched autodirector signature has an unsupported viewSetup register move");
+        return None;
+    };
+    log(&format!(
+        "resolved autodirector view override signature view_setup_move={:02x} {:02x} {:02x}",
+        view_setup_argument_move[0], view_setup_argument_move[1], view_setup_argument_move[2]
+    ));
+
+    Some(patch_address)
 }
 
 struct ModuleSection<'a> {

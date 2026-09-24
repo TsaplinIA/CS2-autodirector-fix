@@ -4,6 +4,7 @@ pub(crate) fn build_conditional_trampoline(
     get_observer_state: usize,
     normal_setup_address: usize,
     original_jump_target: usize,
+    view_setup_argument_move: [u8; 3],
     disabled_mask: u32,
 ) -> Vec<u8> {
     let mut code = Vec::with_capacity(128);
@@ -37,8 +38,8 @@ pub(crate) fn build_conditional_trampoline(
     emit_restore_saved_registers(&mut code);
     emit_mov_rax_imm64(&mut code, get_observer_state);
     code.extend_from_slice(&[0xff, 0xd0]); // call rax
+    code.extend_from_slice(&view_setup_argument_move); // mov rdx,<original viewSetup register>
     code.extend_from_slice(&[
-        0x48, 0x8b, 0xd6, // mov rdx, rsi
         0x48, 0x8b, 0x08, // mov rcx, [rax]
         0x4c, 0x8b, 0x41, 0x28, // mov r8, [rcx+28h]
         0x48, 0x8b, 0xc8, // mov rcx, rax
@@ -97,11 +98,18 @@ mod tests {
 
     #[test]
     fn conditional_trampoline_embeds_disabled_mask() {
-        let code = build_conditional_trampoline(0x1000, 0x2000, 0x3000, 0b0100);
+        let code = build_conditional_trampoline(0x1000, 0x2000, 0x3000, [0x48, 0x8b, 0xd6], 0b0100);
 
         assert!(
             code.windows(4)
                 .any(|window| window == 0b0100u32.to_le_bytes())
         );
+    }
+
+    #[test]
+    fn conditional_trampoline_replays_the_current_view_setup_register_move() {
+        let code = build_conditional_trampoline(0x1000, 0x2000, 0x3000, [0x48, 0x8b, 0xd3], 0b0100);
+
+        assert!(code.windows(3).any(|window| window == [0x48, 0x8b, 0xd3]));
     }
 }
