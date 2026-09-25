@@ -22,6 +22,7 @@ jobs:
       build_id: ${{ steps.build.outputs.build_id }}
       changed: ${{ steps.build.outputs.changed }}
       already_reported: ${{ steps.deduplicate.outputs.already_reported }}
+      existing_pr: ${{ steps.deduplicate.outputs.existing_pr }}
     steps:
       - uses: actions/checkout@v4
 
@@ -80,6 +81,23 @@ jobs:
           else
             echo "already_reported=false" >> "$GITHUB_OUTPUT"
           fi
+          echo "existing_pr=$pr_exists" >> "$GITHUB_OUTPUT"
+
+  merge_existing:
+    needs: discover
+    if: needs.discover.outputs.changed == 'true' && needs.discover.outputs.existing_pr == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Merge the already-created compatibility PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_ID: ${{ needs.discover.outputs.build_id }}
+        shell: bash
+        run: |
+          branch="automation/cs2-build-$BUILD_ID"
+          bash .github/scripts/merge-compatibility-pr.sh "$GITHUB_REPOSITORY" "$branch"
 
   analyze:
     needs: discover
@@ -153,6 +171,7 @@ jobs:
             gh pr create --repo "$GITHUB_REPOSITORY" --base "$GITHUB_REF_NAME" --head "$branch" \
               --title "CS2 build $BUILD_ID is compatible" \
               --body "Offline analysis found one structurally valid autodirector view-override block. No DLL release is created by this PR."
+            bash .github/scripts/merge-compatibility-pr.sh "$GITHUB_REPOSITORY" "$branch"
             exit 0
           fi
           mkdir -p compatibility/history
@@ -167,6 +186,7 @@ jobs:
           gh pr create --repo "$GITHUB_REPOSITORY" --base "$GITHUB_REF_NAME" --head "$branch" \
             --title "CS2 build $BUILD_ID is compatible" \
             --body "Offline analysis found one structurally valid autodirector view-override block. No DLL release is created by this PR."
+          bash .github/scripts/merge-compatibility-pr.sh "$GITHUB_REPOSITORY" "$branch"
 
       - name: Create investigation Issue
         if: steps.report.outputs.status != 'compatible'
