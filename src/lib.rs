@@ -2,15 +2,22 @@
 
 pub mod autodirector_signature;
 
+#[cfg(windows)]
 mod config;
+#[cfg(windows)]
 mod runtime;
+#[cfg(windows)]
 mod trampoline;
 
+#[cfg(windows)]
 use std::ffi::c_void;
 
+#[cfg(windows)]
 const DLL_PROCESS_ATTACH: u32 = 1;
+#[cfg(windows)]
 const DLL_PROCESS_DETACH: u32 = 0;
 
+#[cfg(windows)]
 #[unsafe(no_mangle)]
 /// # Safety
 ///
