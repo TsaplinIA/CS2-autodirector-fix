@@ -1,6 +1,5 @@
 # CS2 Autodirector Fix
 
-[![Rust](https://img.shields.io/badge/Rust-stable-b7410e?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 ![Platform](https://img.shields.io/badge/platform-Windows%20x64-0078d4?logo=windows&logoColor=white)
 [![CS2](https://img.shields.io/badge/game-Counter--Strike%202-f3a712)](#english)
 [![HLAE](https://img.shields.io/badge/HLAE-mirv__loadbinary-6f42c1)](https://github.com/advancedfx/advancedfx)
@@ -14,25 +13,14 @@ Language: [English](#english) | [Русский](#русский)
 
 ### What This Fixes
 
-Anyone who tried to use `spec_autodirector true` in CS2 has probably run into a
-lot of visual bugs. The most annoying ones are weapon and hand jitter, strange
-recoil rendering, small view jumps, and similar first-person camera artifacts.
+`spec_autodirector true` in CS2 can cause weapon and hand jitter, unusual recoil
+rendering, and small jumps in the first-person camera. This DLL bypasses the
+broken autodirector-specific camera path for the camera types you choose.
 
-This gets in the way of using `spec_autodirector true` for commentary on small
-events. Autodirector is useful when there is no dedicated observer, but the
-first-person bugs make the picture look broken.
+Load it into CS2 through [HLAE](https://github.com/advancedfx/advancedfx), and
+the first-person autodirector view should use the normal camera setup instead.
 
-This project is a small fix for those bugs. It is distributed as a DLL: load it
-into CS2, for example through [HLAE](https://github.com/advancedfx/advancedfx)
-with `mirv_loadlibrary`, and the weapon jitter / view jumps on the autodirector
-first-person path should disappear.
-
-Star us on GitHub - your support motivates us a lot! It also helps other
-people find this fix faster.
-
-### Examples
-
-Synchronized before/after GIF or WebP previews will be added later.
+### Example
 
 https://github.com/user-attachments/assets/fb6fc08f-caeb-4a60-a67f-e452e088758a
 
@@ -44,16 +32,16 @@ https://github.com/user-attachments/assets/fb6fc08f-caeb-4a60-a67f-e452e088758a
    - `autodirector-fix-vX.Y.Z.dll`
    - `autodirector-fix-config.toml`
 3. Start CS2 through [HLAE](https://github.com/advancedfx/advancedfx).
-4. In the HLAE / CS2 console, load the DLL:
+4. Load the DLL in the HLAE / CS2 console:
 
 ```text
 mirv_loadlibrary "C:\path\to\autodirector-fix-vX.Y.Z.dll"
 ```
 
-Usage preview WebP will be added later.
+### Configuration
 
-The config file is optional but recommended. It must be placed next to the DLL.
-If the file is missing, the DLL uses the same defaults:
+The configuration file is optional but recommended. Keep it next to the DLL.
+If it is missing, these defaults are used:
 
 ```toml
 [cameras]
@@ -63,99 +51,51 @@ chase = true
 cameraman = true
 ```
 
-`true` keeps the original CS2 autodirector override for that camera type.
-`false` bypasses that override and falls back to the normal camera setup.
+`true` keeps the original CS2 autodirector behavior for that camera type.
+`false` uses the normal camera setup instead.
+
+### Logs
 
 Each DLL injection creates a new `autodirector_fix-<timestamp>-<n>.log` file
-next to the DLL. The fix does not write to the CS2 console.
+next to the DLL.
 
-### Offline Signature Check
+### Contact
 
-`signature-report` analyzes a `client.dll` from disk without starting CS2. It
-uses the same autodirector override matcher and structural validation as the
-runtime DLL, then prints a JSON report. An exit code of `0` means the build is
-compatible; `1` means that the signature needs investigation.
-
-```powershell
-cargo run --bin signature-report -- "C:\path\to\client.dll" 25492732
-```
-
-The optional last argument is the CS2 build ID. The report includes the file
-size, COFF timestamp, `.text` RVA/size, match count, decoded viewSetup move,
-and resolved call/jump targets. It is intended for CI artifacts, not runtime
-configuration: the DLL still scans the loaded `client.dll` itself.
-
-### Build Locally
-
-Requirements:
-
-- Windows x64
-- Rust stable
-- MSVC Rust target: `x86_64-pc-windows-msvc`
-
-```powershell
-rustup target add x86_64-pc-windows-msvc
-cargo build --release
-cargo test
-```
-
-Local DLL output:
-
-```text
-target\release\autodirector_fix.dll
-```
-
-For local manual testing, keep `autodirector-fix-config.toml` next to the DLL
-you load with `mirv_loadlibrary`.
-
-### Contacts
-
-There is no Discord or dedicated support channel yet. This may appear later.
-For now, you can contact the author on Telegram: [@Cool8ilya](https://t.me/Cool8ilya).
+For support, contact [@Cool8ilya](https://t.me/Cool8ilya) on Telegram.
 
 ## Русский
 
-### Что Исправляет
+### Что исправляет фикс
 
-Любой, кто пытался использовать `spec_autodirector true` в CS2, скорее всего
-сталкивался с большим количеством визуальных багов. Самые бесячие:
-подергивание рук и оружия, странное отображение отдачи, небольшие прыжки камеры
-и похожие артефакты камеры от первого лица.
+При `spec_autodirector true` в CS2 могут появляться подёргивания рук и оружия,
+необычное отображение отдачи и небольшие скачки камеры от первого лица. Эта DLL
+отключает проблемную ветку камеры autodirector для выбранных типов камер.
 
-Это мешает использовать `spec_autodirector true` комментаторам на маленьких
-ивентах. Автодиректор полезен, когда нет отдельного обсервера, но из-за багов
-камеры от первого лица картинка выглядит сломанной.
+Загрузи DLL в CS2 через [HLAE](https://github.com/advancedfx/advancedfx), и
+autodirector будет использовать обычную настройку камеры для этих режимов.
 
-Этот проект - небольшой фикс для этих багов. Он поставляется как DLL: загрузи
-ее в CS2, например через [HLAE](https://github.com/advancedfx/advancedfx)
-командой `mirv_loadlibrary`, и подергивания оружия / прыжки камеры на пути
-автодиректора от первого лица должны пропасть.
-
-Поставь звезду на GitHub - твоя поддержка очень мотивирует! Так другим людям
-будет проще найти этот фикс.
-
-### Примеры
+### Пример
 
 https://github.com/user-attachments/assets/fb6fc08f-caeb-4a60-a67f-e452e088758a
 
 ### Использование
 
-1. Скачай последний `autodirector-fix-vX.Y.Z.zip` в
-   [разделе релизов](https://github.com/TsaplinIA/CS2-autodirector-fix/releases).
-2. Распакуй архив. Внутри лежат:
+1. Скачай последний `autodirector-fix-vX.Y.Z.zip` из
+   [Releases](https://github.com/TsaplinIA/CS2-autodirector-fix/releases).
+2. Распакуй архив. В нём находятся:
    - `autodirector-fix-vX.Y.Z.dll`
    - `autodirector-fix-config.toml`
 3. Запусти CS2 через [HLAE](https://github.com/advancedfx/advancedfx).
-4. В консоли HLAE / CS2 загрузи DLL:
+4. Загрузи DLL в консоли HLAE / CS2:
 
 ```text
 mirv_loadlibrary "C:\path\to\autodirector-fix-vX.Y.Z.dll"
 ```
 
-WebP-пример загрузки через HLAE будет добавлен позже.
+### Конфигурация
 
-Конфиг опциональный, но его лучше оставить рядом с DLL. Если файла нет, DLL
-использует такие же значения по умолчанию:
+Конфиг необязателен, но его лучше оставить рядом с DLL. Если файла нет,
+используются такие значения:
 
 ```toml
 [cameras]
@@ -165,38 +105,14 @@ chase = true
 cameraman = true
 ```
 
-`true` оставляет оригинальный оверрайд автодиректора CS2 для этого типа
-камеры. `false` отключает оверрайд и возвращает камеру в обычную логику
-настройки вида.
+`true` оставляет исходное поведение autodirector для этого типа камеры.
+`false` использует обычную настройку камеры.
 
-DLL пишет логи в консоль CS2 с префиксом `[autodirector-fix]`, а также создает
-`autodirector_fix.log` рядом с DLL.
+### Логи
 
-### Сборка У Себя
+При каждой новой загрузке DLL рядом с ней создаётся новый файл
+`autodirector_fix-<timestamp>-<n>.log`.
 
-Требования:
+### Связь
 
-- Windows x64
-- стабильный Rust
-- MSVC-цель Rust: `x86_64-pc-windows-msvc`
-
-```powershell
-rustup target add x86_64-pc-windows-msvc
-cargo build --release
-cargo test
-```
-
-Локальная DLL появится здесь:
-
-```text
-target\release\autodirector_fix.dll
-```
-
-Для ручного локального теста положи `autodirector-fix-config.toml` рядом с DLL,
-которую загружаешь через `mirv_loadlibrary`.
-
-### Контакты
-
-Дискорда или отдельного канала поддержки пока нет. Возможно, они появятся
-позже. Сейчас можно писать автору в Telegram:
-[@Cool8ilya](https://t.me/Cool8ilya).
+По вопросам можно написать в Telegram: [@Cool8ilya](https://t.me/Cool8ilya).
