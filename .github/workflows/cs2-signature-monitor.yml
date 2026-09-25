@@ -148,12 +148,18 @@ jobs:
         shell: bash
         run: |
           report="$RUNNER_TEMP/cs2-signature/report.json"
+          branch="automation/cs2-build-$BUILD_ID"
+          if git ls-remote --exit-code --heads origin "refs/heads/$branch" > /dev/null; then
+            gh pr create --repo "$GITHUB_REPOSITORY" --base "$GITHUB_REF_NAME" --head "$branch" \
+              --title "CS2 build $BUILD_ID is compatible" \
+              --body "Offline analysis found one structurally valid autodirector view-override block. No DLL release is created by this PR."
+            exit 0
+          fi
           mkdir -p compatibility/history
           cp "$report" "compatibility/history/$BUILD_ID.json"
           cp "$report" compatibility/steam-public.json
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          branch="automation/cs2-build-$BUILD_ID"
           git switch -c "$branch"
           git add compatibility
           git commit -m "docs: record CS2 build $BUILD_ID compatibility"
