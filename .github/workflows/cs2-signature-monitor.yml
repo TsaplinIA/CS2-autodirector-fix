@@ -48,7 +48,12 @@ jobs:
         shell: bash
         run: |
           build_id="$(bash .github/scripts/get-steam-public-build.sh "$RUNNER_TEMP/steamcmd/steamcmd.sh")"
-          current_build_id="$(jq --raw-output '.build_id' compatibility/steam-public.json)"
+          state_file="compatibility/steam-public.json"
+          if [[ -f $state_file ]]; then
+            current_build_id="$(jq --raw-output '.build_id' "$state_file")"
+          else
+            current_build_id=""
+          fi
           [[ $build_id =~ ^[0-9]+$ ]]
           echo "build_id=$build_id" >> "$GITHUB_OUTPUT"
           if [[ $build_id == "$current_build_id" ]]; then
