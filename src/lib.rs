@@ -1,7 +1,8 @@
 #![allow(non_snake_case)]
 
+pub mod autodirector_signature;
+
 mod config;
-mod pattern;
 mod runtime;
 mod trampoline;
 

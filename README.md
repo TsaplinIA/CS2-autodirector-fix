@@ -66,8 +66,24 @@ cameraman = true
 `true` keeps the original CS2 autodirector override for that camera type.
 `false` bypasses that override and falls back to the normal camera setup.
 
-The DLL writes logs to the CS2 console with the `[autodirector-fix]` prefix and
-also creates `autodirector_fix.log` next to the DLL.
+Each DLL injection creates a new `autodirector_fix-<timestamp>-<n>.log` file
+next to the DLL. The fix does not write to the CS2 console.
+
+### Offline Signature Check
+
+`signature-report` analyzes a `client.dll` from disk without starting CS2. It
+uses the same autodirector override matcher and structural validation as the
+runtime DLL, then prints a JSON report. An exit code of `0` means the build is
+compatible; `1` means that the signature needs investigation.
+
+```powershell
+cargo run --bin signature-report -- "C:\path\to\client.dll" 25492732
+```
+
+The optional last argument is the CS2 build ID. The report includes the file
+size, COFF timestamp, `.text` RVA/size, match count, decoded viewSetup move,
+and resolved call/jump targets. It is intended for CI artifacts, not runtime
+configuration: the DLL still scans the loaded `client.dll` itself.
 
 ### Build Locally
 
