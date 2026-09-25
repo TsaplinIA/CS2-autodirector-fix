@@ -1,0 +1,16 @@
+{
+  "input": "/home/runner/work/_temp/cs2-signature/client/game/csgo/bin/win64/client.dll",
+  "build_id": "25515854",
+  "file_size": 39174296,
+  "coff_timestamp": 1790282669,
+  "text_rva": "0x1000",
+  "text_size": 27936192,
+  "autodirector_view_override": {
+    "status": "compatible",
+    "matches": 1,
+    "patch_rva": "0xb9c70d",
+    "view_setup_move": "48 8b d3",
+    "get_observer_state_rva": "0xbaa2b0",
+    "normal_setup_jump_target_rva": "0xb9c867"
+  }
+}
