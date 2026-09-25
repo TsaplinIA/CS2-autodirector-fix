@@ -7,7 +7,11 @@ description = "Experimental CS2 autodirector first-person camera fix DLL for HLA
 
 [lib]
 name = "autodirector_fix"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "signature-report"
+path = "src/bin/signature_report.rs"
 
 [profile.release]
 panic = "abort"

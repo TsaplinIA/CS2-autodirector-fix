@@ -1,0 +1,185 @@
+name: CS2 Signature Monitor
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+# This locks the period from discovery through analysis and PR/Issue creation.
+concurrency:
+  group: cs2-signature-monitor
+  cancel-in-progress: false
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      build_id: ${{ steps.build.outputs.build_id }}
+      changed: ${{ steps.build.outputs.changed }}
+      already_reported: ${{ steps.deduplicate.outputs.already_reported }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore SteamCMD metadata cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/steamcmd
+          key: steamcmd-linux-v1
+
+      - name: Install SteamCMD when absent
+        shell: bash
+        run: |
+          steamcmd_dir="$RUNNER_TEMP/steamcmd"
+          if [[ ! -x "$steamcmd_dir/steamcmd.sh" ]]; then
+            mkdir -p "$steamcmd_dir"
+            curl --fail --location --silent --show-error \
+              https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz |
+              tar --extract --gzip --file - --directory "$steamcmd_dir"
+            chmod +x "$steamcmd_dir/steamcmd.sh"
+          fi
+
+      - name: Read public CS2 build without downloading the game
+        id: build
+        shell: bash
+        run: |
+          build_id="$(bash .github/scripts/get-steam-public-build.sh "$RUNNER_TEMP/steamcmd/steamcmd.sh")"
+          current_build_id="$(jq --raw-output '.build_id' compatibility/steam-public.json)"
+          [[ $build_id =~ ^[0-9]+$ ]]
+          echo "build_id=$build_id" >> "$GITHUB_OUTPUT"
+          if [[ $build_id == "$current_build_id" ]]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Skip only a result already opened for this exact build
+        id: deduplicate
+        if: steps.build.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_ID: ${{ steps.build.outputs.build_id }}
+        shell: bash
+        run: |
+          prs="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 100 --json headRefName)"
+          issues="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --label cs2-signature-investigation --limit 100 --json title)"
+          branch="automation/cs2-build-$BUILD_ID"
+          pr_exists="$(jq --arg branch "$branch" 'any(.[]; .headRefName == $branch)' <<<"$prs")"
+          issue_exists="$(jq --arg build "$BUILD_ID" 'any(.[]; .title == ("Investigate CS2 build " + $build + " signature"))' <<<"$issues")"
+          if [[ $pr_exists == true || $issue_exists == true ]]; then
+            echo "already_reported=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "already_reported=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  analyze:
+    needs: discover
+    if: needs.discover.outputs.changed == 'true' && needs.discover.outputs.already_reported != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Linux-native offline analyzer
+        run: cargo build --release --bin signature-report
+
+      - name: Download current Windows client.dll and create report
+        id: report
+        env:
+          BUILD_ID: ${{ needs.discover.outputs.build_id }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          work="$RUNNER_TEMP/cs2-signature"
+          mkdir -p "$work/depotdownloader"
+
+          if ! curl --fail --location --silent --show-error \
+            https://github.com/SteamRE/DepotDownloader/releases/latest/download/DepotDownloader-linux-x64.zip \
+            --output "$work/depotdownloader.zip" ||
+            ! unzip -q "$work/depotdownloader.zip" -d "$work/depotdownloader"; then
+            jq --null-input --arg build "$BUILD_ID" '{status: "downloader_install_failed", build_id: $build}' > "$work/report.json"
+            echo "status=downloader_install_failed" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          chmod +x "$work/depotdownloader/DepotDownloader"
+
+          set +e
+          download_output="$(bash .github/scripts/download-cs2-client-dll.sh "$work/depotdownloader/DepotDownloader" "$work/client" 2>&1)"
+          download_exit=$?
+          set -e
+          printf '%s\n' "$download_output" > "$work/download.log"
+          client_dll="$(tail -n 1 "$work/download.log")"
+          if [[ $download_exit -ne 0 || ! -f $client_dll ]]; then
+            jq --null-input --arg build "$BUILD_ID" '{status: "download_failed", build_id: $build}' > "$work/report.json"
+            echo "status=download_failed" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          set +e
+          target/release/signature-report "$client_dll" "$BUILD_ID" > "$work/report.json"
+          set -e
+          status="$(jq --raw-output '.autodirector_view_override.status' "$work/report.json")"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+
+      - name: Upload diagnostic report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cs2-signature-${{ needs.discover.outputs.build_id }}
+          path: ${{ runner.temp }}/cs2-signature
+          if-no-files-found: warn
+
+      - name: Create compatibility PR
+        if: steps.report.outputs.status == 'compatible'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_ID: ${{ needs.discover.outputs.build_id }}
+        shell: bash
+        run: |
+          report="$RUNNER_TEMP/cs2-signature/report.json"
+          mkdir -p compatibility/history
+          cp "$report" "compatibility/history/$BUILD_ID.json"
+          cp "$report" compatibility/steam-public.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          branch="automation/cs2-build-$BUILD_ID"
+          git switch -c "$branch"
+          git add compatibility
+          git commit -m "docs: record CS2 build $BUILD_ID compatibility"
+          git push --set-upstream origin "$branch"
+          gh pr create --repo "$GITHUB_REPOSITORY" --base "$GITHUB_REF_NAME" --head "$branch" \
+            --title "CS2 build $BUILD_ID is compatible" \
+            --body "Offline analysis found one structurally valid autodirector view-override block. No DLL release is created by this PR."
+
+      - name: Create investigation Issue
+        if: steps.report.outputs.status != 'compatible'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_ID: ${{ needs.discover.outputs.build_id }}
+          STATUS: ${{ steps.report.outputs.status }}
+        shell: bash
+        run: |
+          report="$RUNNER_TEMP/cs2-signature/report.json"
+          gh label create cs2-signature-investigation --repo "$GITHUB_REPOSITORY" \
+            --color B60205 --description "CS2 signature needs manual investigation" --force
+          {
+            echo "The scheduled offline check for CS2 public build $BUILD_ID returned **$STATUS**."
+            echo
+            echo "The JSON report is embedded below and also uploaded as a workflow artifact."
+            echo
+            echo "<details><summary>signature report</summary>"
+            echo
+            echo '```json'
+            cat "$report"
+            echo '```'
+            echo '</details>'
+          } > "$RUNNER_TEMP/cs2-signature/issue-body.md"
+          gh issue create --repo "$GITHUB_REPOSITORY" --label cs2-signature-investigation \
+            --title "Investigate CS2 build $BUILD_ID signature" \
+            --body-file "$RUNNER_TEMP/cs2-signature/issue-body.md"
