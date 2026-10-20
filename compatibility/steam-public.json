@@ -1,8 +1,8 @@
 {
   "input": "/home/runner/work/_temp/cs2-signature/client/game/csgo/bin/win64/client.dll",
-  "build_id": "25966348",
+  "build_id": "26087496",
   "file_size": 39205528,
-  "coff_timestamp": 1792021268,
+  "coff_timestamp": 1792521244,
   "text_rva": "0x1000",
   "text_size": 27961408,
   "autodirector_view_override": {
